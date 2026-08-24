@@ -32,13 +32,13 @@ nav{position:fixed;bottom:0;left:0;right:0;background:#fff;border-top:1px solid 
 </head>
 <body>
 <div class="app">
-<header><div class="brand"><img src="lokassistent-logo.png" alt="LOKASSIST Logo"><div><h1>LOKASSIST</h1><div class="sub">Dein digitaler Fahrbegleiter · 1.0 Alpha 16 · Dienstmodell B2</div></div></div></header>
+<header><div class="brand"><img src="lokassistent-logo.png" alt="LOKASSIST Logo"><div><h1>LOKASSIST</h1><div class="sub">Dein digitaler Fahrbegleiter · 1.0 Alpha 17 · Dienstmodell B2</div></div></div></header>
 
 <main>
 <section id="home" class="screen active">
 <div class="card hero"><img src="lokassistent-logo.png" alt=""><div><h2>Willkommen bei LOKASSIST</h2><p>Sicher. Pünktlich. Entspannt.</p></div></div>
 <div class="card" id="homeServiceCard"><h2>🗓️ Aktueller Dienst</h2><div id="serviceHomeStatus" class="muted">Kein Dienst aktiv.</div><div class="grid" style="margin-top:10px"><label>Dienstbeginn Datum<input id="serviceDate" type="date"></label><label>Beginn<input id="serviceStart" type="time"></label></div><div class="actions"><button id="serviceStartBtn" class="primary" onclick="startService()">▶️ Dienst starten</button><button id="serviceFinishBtn" class="secondary" onclick="finishService()" style="display:none">😎 Feierabend</button></div><p class="muted">Ein Dienst kann über Mitternacht laufen. Alle Tf-Fahrten werden dem aktiven Dienst zugeordnet.</p></div>
-<div class="section-title"><h2>Schnellzugriff</h2><span class="badge">1.0 Alpha 16 · Dienstmodell</span></div>
+<div class="section-title"><h2>Schnellzugriff</h2><span class="badge">1.0 Alpha 17 · Dienstmodell</span></div>
 <div class="tile-grid">
 <button class="tile accent" onclick="newTfRide()"><span class="icon">🚆</span><span><strong>Meine Fahrt</strong><br><small>Zuglauf, Fahrplan & persönliche Notizen</small></span></button>
 <button class="tile accent" onclick="newRide()"><span class="icon">👨‍🏫</span><span><strong>Ausbilder</strong><br><small>Ausbildungsfahrt & Protokoll</small></span></button>
@@ -335,6 +335,7 @@ function toTime(v){
 
 let tfData=null;
 let tfEditMode=true;
+let tfVehicles=null;
 function setTfEditMode(enabled){
  tfEditMode=!!enabled;
  ["tfDate","tfTrain","tfVehicle","tfRoute","tfNotes"].forEach(id=>{if($(id))$(id).readOnly=!tfEditMode});
@@ -405,10 +406,11 @@ function finishService(){
 }
 
 function newTfRide(){
- tfData=null;tfEditMode=true;
+ tfData=null;tfEditMode=true;tfVehicles=getVehicles().map(x=>({...x}));
  const service=getService();
  $("tfDate").value=service?.status==="active"?service.serviceDate:today();$("tfTrain").value="";$("tfVehicle").value="BR 8442";$("tfRoute").value="";
  $("tfNotes").value="";$("tfStops").innerHTML="";$("tfSummary").innerHTML="<p class='muted'>Zuglauf laden, um Halte und Sollzeiten zu sehen.</p>";$("tfStatus").textContent="";
+ renderVehicles();
  setTfEditMode(true);show("tf");
 }
 async function loadTfPlan(){
@@ -484,9 +486,11 @@ function saveTfRide(fromEdit=false){
   stops:tfData.times.map(t=>({stop_id:t.stop_id||"",name:tfData.byId?.[t.stop_id]?.stop_name||t.stop_headsign||t.stop_id||"",pa:toTime(t.arrival_time),pd:toTime(t.departure_time)}))
  }:(tfData?.savedPlan||null);
  const activeService=getService();
- const d={id:tfData?.savedId||crypto.randomUUID(),date:$("tfDate").value,train:$("tfTrain").value,vehicle:$("tfVehicle").value,route:$("tfRoute").value,notes:$("tfNotes").value,plan,serviceId:activeService?.status==="active"?activeService.id:(tfData?.serviceId||null),serviceDate:activeService?.status==="active"?activeService.serviceDate:(tfData?.serviceDate||$("tfDate").value),createdAt:tfData?.createdAt||new Date().toISOString(),updatedAt:new Date().toISOString()};
+ const vehicles=collectVehicleRows();
+ tfVehicles=vehicles.map(x=>({...x}));
+ const d={id:tfData?.savedId||crypto.randomUUID(),date:$("tfDate").value,train:$("tfTrain").value,vehicle:$("tfVehicle").value,route:$("tfRoute").value,notes:$("tfNotes").value,vehicles,plan,serviceId:activeService?.status==="active"?activeService.id:(tfData?.serviceId||null),serviceDate:activeService?.status==="active"?activeService.serviceDate:(tfData?.serviceDate||$("tfDate").value),createdAt:tfData?.createdAt||new Date().toISOString(),updatedAt:new Date().toISOString()};
  const a=getTfRides(),i=a.findIndex(x=>x.id===d.id);if(i>=0)a[i]=d;else a.unshift(d);
- localStorage.setItem("tfRides",JSON.stringify(a));tfData={...(tfData||{}),savedId:d.id,createdAt:d.createdAt,savedPlan:plan};renderTfHistory();renderTfRecent();
+ localStorage.setItem("tfRides",JSON.stringify(a));tfData={...(tfData||{}),savedId:d.id,createdAt:d.createdAt,savedPlan:plan,vehicles:vehicles.map(x=>({...x}))};renderTfHistory();renderTfRecent();
  if(fromEdit){alert("Änderungen gespeichert.");setTfEditMode(false);$("tfStatus").textContent="📋 Gespeicherte Fahrt aktualisiert."}
  else{alert("Tf-Fahrt lokal gespeichert.");newTfRide()}
 }
@@ -529,7 +533,7 @@ function updateVehicleType(i){
 function getVehicles(){try{return JSON.parse(localStorage.getItem(VEHICLE_KEY)||"[]")}catch(_){return []}}
 function renderVehicles(){
  const list=$("vehicleList"); if(!list)return;
- let v=getVehicles();
+ let v=Array.isArray(tfVehicles)?tfVehicles:getVehicles();
  if(!v.length)v=[{br:"BR 8442",number:"",type:"3-teilig",position:"1"}];
  list.innerHTML=v.map((x,i)=>`<div class="card" style="margin:8px 0;padding:12px;background:#f8fafc">
   <div class="grid">
@@ -554,24 +558,33 @@ function renderVehicles(){
   ${i>0?`<div class="actions vehicle-remove-action"><button class="danger" onclick="removeVehicleRow(${i})">🗑️ Entfernen</button></div>`:""}
  </div>`).join("");
 }
-function addVehicleRow(){
- const v=getVehicles();
- if(v.length>=3){alert("Es können maximal 3 Fahrzeuge gekuppelt werden.");return}
- v.push({br:"",number:"",type:"unbekannt",position:String(v.length+1)});
- localStorage.setItem(VEHICLE_KEY,JSON.stringify(v));renderVehicles();
-}
-function removeVehicleRow(i){
- const v=getVehicles();v.splice(i,1);v.forEach((x,n)=>x.position=String(n+1));
- localStorage.setItem(VEHICLE_KEY,JSON.stringify(v));renderVehicles();
-}
-function saveVehicles(){
+function collectVehicleRows(){
  const rows=[...document.querySelectorAll('[id^="vbr"]')].map((el,i)=>{
   const br=el.value,number=$("vno"+i)?.value.trim()||"",derived=deriveVehicleType(br,number);
   return {br,number,type:derived!=="unbekannt"?derived:($("vtype"+i)?.value||"unbekannt"),position:$("vpos"+i)?.value||String(i+1)};
  }).filter(x=>x.br||x.number);
+ return rows.slice(0,3);
+}
+function addVehicleRow(){
+ const v=(Array.isArray(tfVehicles)?tfVehicles:getVehicles()).map(x=>({...x}));
+ if(v.length>=3){alert("Es können maximal 3 Fahrzeuge gekuppelt werden.");return}
+ v.push({br:"",number:"",type:"unbekannt",position:String(v.length+1)});
+ tfVehicles=v;
+ if(!tfData?.savedId)localStorage.setItem(VEHICLE_KEY,JSON.stringify(v));
+ renderVehicles();
+}
+function removeVehicleRow(i){
+ const v=(Array.isArray(tfVehicles)?tfVehicles:getVehicles()).map(x=>({...x}));v.splice(i,1);v.forEach((x,n)=>x.position=String(n+1));
+ tfVehicles=v;
+ if(!tfData?.savedId)localStorage.setItem(VEHICLE_KEY,JSON.stringify(v));
+ renderVehicles();
+}
+function saveVehicles(){
+ const rows=collectVehicleRows();
  if(rows.length>3){alert("Maximal 3 Fahrzeuge.");return}
- localStorage.setItem(VEHICLE_KEY,JSON.stringify(rows));
- $("vehicleStatus").textContent=rows.length?"✅ Fahrzeuge übernommen.":"Keine Fahrzeuge ausgewählt.";
+ tfVehicles=rows;
+ if(!tfData?.savedId)localStorage.setItem(VEHICLE_KEY,JSON.stringify(rows));
+ $("vehicleStatus").textContent=rows.length?`✅ ${rows.length} Fahrzeug${rows.length===1?"":"e"} übernommen.`:"Keine Fahrzeuge ausgewählt.";
 }
 function getProfile(){return JSON.parse(localStorage.getItem("lokassistentProfile")||"{}")}
 function loadProfile(){
@@ -644,8 +657,9 @@ function renderTfHistory(){
 function loadTfRide(id){
  const x=getTfRides().find(r=>r.id===id);if(!x)return;
  $("tfDate").value=x.date||today();$("tfTrain").value=x.train||"";$("tfVehicle").value=x.vehicle||"BR 8442";$("tfRoute").value=x.route||"";$("tfNotes").value=x.notes||"";
- tfData={savedId:x.id,createdAt:x.createdAt||new Date().toISOString(),savedPlan:x.plan||null,serviceId:x.serviceId||null,serviceDate:x.serviceDate||x.date||null};
- renderSavedTfPlan(x.plan);setTfEditMode(false);$("tfStatus").textContent="📋 Gespeicherte Fahrt geladen.";show("tf");
+ tfVehicles=(Array.isArray(x.vehicles)?x.vehicles:getVehicles()).map(v=>({...v}));
+ tfData={savedId:x.id,createdAt:x.createdAt||new Date().toISOString(),savedPlan:x.plan||null,vehicles:tfVehicles.map(v=>({...v})),serviceId:x.serviceId||null,serviceDate:x.serviceDate||x.date||null};
+ renderVehicles();renderSavedTfPlan(x.plan);setTfEditMode(false);$("tfStatus").textContent="📋 Gespeicherte Fahrt geladen.";show("tf");
 }
 function deleteTfRide(id){
  if(!confirm("Diese eigene Fahrt wirklich löschen?"))return;
