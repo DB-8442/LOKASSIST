@@ -487,6 +487,8 @@ function saveTfRide(fromEdit=false){
  }:(tfData?.savedPlan||null);
  const activeService=getService();
  const vehicles=collectVehicleRows();
+ const vehicleError=validateVehicleConfiguration(vehicles);
+ if(vehicleError){$("vehicleStatus").textContent=vehicleError;alert(vehicleError);return}
  tfVehicles=vehicles.map(x=>({...x}));
  const d={id:tfData?.savedId||crypto.randomUUID(),date:$("tfDate").value,train:$("tfTrain").value,vehicle:$("tfVehicle").value,route:$("tfRoute").value,notes:$("tfNotes").value,vehicles,plan,serviceId:activeService?.status==="active"?activeService.id:(tfData?.serviceId||null),serviceDate:activeService?.status==="active"?activeService.serviceDate:(tfData?.serviceDate||$("tfDate").value),createdAt:tfData?.createdAt||new Date().toISOString(),updatedAt:new Date().toISOString()};
  const a=getTfRides(),i=a.findIndex(x=>x.id===d.id);if(i>=0)a[i]=d;else a.unshift(d);
@@ -534,7 +536,7 @@ function getVehicles(){try{return JSON.parse(localStorage.getItem(VEHICLE_KEY)||
 function renderVehicles(){
  const list=$("vehicleList"); if(!list)return;
  let v=Array.isArray(tfVehicles)?tfVehicles:getVehicles();
- if(!v.length)v=[{br:"BR 8442",number:"",type:"3-teilig",position:"1"}];
+ if(!v.length){v=[{br:"BR 8442",number:"",type:"3-teilig",position:"1"}];tfVehicles=v.map(x=>({...x}));}
  list.innerHTML=v.map((x,i)=>`<div class="card" style="margin:8px 0;padding:12px;background:#f8fafc">
   <div class="grid">
    <label>Baureihe<select id="vbr${i}" onchange="updateVehicleType(${i})">
@@ -565,8 +567,17 @@ function collectVehicleRows(){
  }).filter(x=>x.br||x.number);
  return rows.slice(0,3);
 }
+function validateVehicleConfiguration(vehicles){
+ const invalidNumber=vehicles.find(v=>!/^\d+$/.test(String(v.number||"").trim()));
+ if(invalidNumber)return "⚠️ Fahrzeugkonfiguration prüfen: Jedes Fahrzeug benötigt eine gültige Fahrzeugnummer.";
+ const actual=vehicles.map(v=>String(v.position||"—"));
+ const expected=vehicles.map((_,i)=>String(i+1));
+ if(actual.some((position,i)=>position!==expected[i]))return `⚠️ Fahrzeugkonfiguration prüfen: Die Zugverbände müssen fortlaufend nummeriert sein. Aktuell: ${actual.join(" / ")||"—"}. Erwartet: ${expected.join(" / ")||"—"}.`;
+ return "";
+}
 function addVehicleRow(){
- const v=(Array.isArray(tfVehicles)?tfVehicles:getVehicles()).map(x=>({...x}));
+ tfVehicles=collectVehicleRows();
+ const v=tfVehicles.map(x=>({...x}));
  if(v.length>=3){alert("Es können maximal 3 Fahrzeuge gekuppelt werden.");return}
  v.push({br:"",number:"",type:"unbekannt",position:String(v.length+1)});
  tfVehicles=v;
@@ -574,7 +585,8 @@ function addVehicleRow(){
  renderVehicles();
 }
 function removeVehicleRow(i){
- const v=(Array.isArray(tfVehicles)?tfVehicles:getVehicles()).map(x=>({...x}));v.splice(i,1);v.forEach((x,n)=>x.position=String(n+1));
+ tfVehicles=collectVehicleRows();
+ const v=tfVehicles.map(x=>({...x}));v.splice(i,1);
  tfVehicles=v;
  if(!tfData?.savedId)localStorage.setItem(VEHICLE_KEY,JSON.stringify(v));
  renderVehicles();
@@ -632,13 +644,18 @@ function requirePin(){
 }
 
 function getTfRides(){return JSON.parse(localStorage.getItem("tfRides")||"[]")}
+function formatVehicles(vehicles,fallbackVehicle){
+ const list=Array.isArray(vehicles)?vehicles.filter(v=>v&&(v.br||v.number)):[];
+ if(list.length)return list.map(v=>[v.br,v.number,v.type&&v.type!=="unbekannt"?`(${v.type})`:""].filter(Boolean).join(" ")).join(" · ");
+ return fallbackVehicle||"";
+}
 function renderTfRecent(){
  const a=getTfRides();
  const box=$("tfRecent"); if(!box)return;
  box.innerHTML=a.slice(0,5).map(x=>`
  <div class="metric">
   <span><b>${esc(x.date||"")}</b> · ${esc(x.train||"keine Zugnummer")}<br>
-  <span class="muted">${esc(x.route||"ohne Laufweg")} · ${esc(x.vehicle||"")}${x.serviceId?` · Dienst ${esc(x.serviceDate||x.date||"")}`:""}</span></span>
+  <span class="muted">${esc(x.route||"ohne Laufweg")} · ${esc(formatVehicles(x.vehicles,x.vehicle))}${x.serviceId?` · Dienst ${esc(x.serviceDate||x.date||"")}`:""}</span></span>
   <button class="secondary" onclick='loadTfRide(${JSON.stringify(x.id)})'>Öffnen</button>
  </div>`).join("") || "<p class='muted'>Noch keine eigenen Fahrten gespeichert.</p>";
 }
@@ -647,7 +664,7 @@ function renderTfHistory(){
  box.innerHTML=a.map(x=>`
  <div class="metric">
   <span><b>${esc(x.date||"")}</b> · ${esc(x.train||"keine Zugnummer")}<br>
-  <span class="muted">${esc(x.route||"ohne Laufweg")} · ${esc(x.vehicle||"")}${x.serviceId?` · Dienst ${esc(x.serviceDate||x.date||"")}`:""}</span></span>
+  <span class="muted">${esc(x.route||"ohne Laufweg")} · ${esc(formatVehicles(x.vehicles,x.vehicle))}${x.serviceId?` · Dienst ${esc(x.serviceDate||x.date||"")}`:""}</span></span>
   <span class="actions">
    <button class="secondary" onclick='loadTfRide(${JSON.stringify(x.id)})'>Öffnen</button>
    <button class="danger" onclick='deleteTfRide(${JSON.stringify(x.id)})'>Löschen</button>
