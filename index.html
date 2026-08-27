@@ -72,6 +72,7 @@ nav{position:fixed;bottom:0;left:0;right:0;background:#fff;border-top:1px solid 
 <div id="vehicleList"></div>
 <div id="tfVehicleActions" class="actions">
 <button class="secondary" onclick="addVehicleRow()">➕ Fahrzeug hinzufügen</button>
+<button class="secondary" onclick="reverseVehicleRows()">🔄 Kompletten Zugverband wenden</button>
 <button class="primary" onclick="saveVehicles()">💾 Fahrzeuge übernehmen</button>
 </div>
 <p id="vehicleStatus" class="muted"></p>
@@ -570,6 +571,14 @@ function collectVehicleRows(){
 function validateVehicleConfiguration(vehicles){
  const invalidNumber=vehicles.find(v=>!/^\d+$/.test(String(v.number||"").trim()));
  if(invalidNumber)return "⚠️ Fahrzeugkonfiguration prüfen: Jedes Fahrzeug benötigt eine gültige Fahrzeugnummer.";
+ const vehicleNumbers=new Set();
+ const duplicateNumber=vehicles.find(v=>{
+  const number=String(v.number).trim();
+  if(vehicleNumbers.has(number))return true;
+  vehicleNumbers.add(number);
+  return false;
+ });
+ if(duplicateNumber)return `⚠️ Fahrzeug ${String(duplicateNumber.number).trim()} wurde mehrfach eingetragen. Ein Fahrzeug kann nur einmal im Zugverband vorkommen.`;
  const actual=vehicles.map(v=>String(v.position||"—"));
  const expected=vehicles.map((_,i)=>String(i+1));
  if(actual.some((position,i)=>position!==expected[i]))return `⚠️ Fahrzeugkonfiguration prüfen: Die Zugverbände müssen fortlaufend nummeriert sein. Aktuell: ${actual.join(" / ")||"—"}. Erwartet: ${expected.join(" / ")||"—"}.`;
@@ -590,6 +599,13 @@ function removeVehicleRow(i){
  tfVehicles=v;
  if(!tfData?.savedId)localStorage.setItem(VEHICLE_KEY,JSON.stringify(v));
  renderVehicles();
+}
+function reverseVehicleRows(){
+ const rows=collectVehicleRows();
+ tfVehicles=rows.map(x=>({...x})).reverse();
+ if(!tfData?.savedId)localStorage.setItem(VEHICLE_KEY,JSON.stringify(tfVehicles));
+ renderVehicles();
+ $("vehicleStatus").textContent="✅ Zugverband wurde gewendet.";
 }
 function saveVehicles(){
  const rows=collectVehicleRows();
