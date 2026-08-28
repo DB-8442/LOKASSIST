@@ -144,6 +144,13 @@ $("skills").innerHTML="";
 skillNames.forEach((n,i)=>{let val=data[n]?.level||"—",note=data[n]?.note||"";let div=document.createElement("div");div.className="skill";div.innerHTML=`<div class="skilltop"><strong>${n}</strong><span id="sv${i}">${val}</span></div><div class="rate">${levels.map(l=>`<button class="${l===val?'sel':''}" onclick="setSkill(${i},'${esc(l)}',this)">${l}</button>`).join("")}</div><textarea id="sn${i}" placeholder="Kurze Bemerkung ...">${esc(note)}</textarea>`;$("skills").appendChild(div);});
 }
 function setSkill(i,val,btn){document.querySelectorAll(".skill")[i].querySelectorAll(".rate button").forEach(b=>b.classList.remove("sel"));btn.classList.add("sel");$("sv"+i).textContent=val}
+function reverseVehicleRows(){
+ const container=$("vehicleRows");
+ [...container.querySelectorAll(".vehicle-row")].reverse().forEach((row,index)=>{
+  container.appendChild(row);
+  row.querySelector(".vehicle-position").value=index+1;
+ });
+}
 function esc(s){return String(s??"").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&#39;")}
 function addStop(d={}){
 let el=document.createElement("div");el.className="stop";el.innerHTML=`<div class="stophead"><strong>📍 <span class="stopnum"></span></strong><button class="danger" onclick="this.closest('.stop').remove();renumber()">Entfernen</button></div><div class="grid" style="margin-top:8px"><label class="full">Bahnhof / Halt<input class="sn" value="${esc(d.name)}"></label><label>Plan-Ankunft<input class="pa" type="time" value="${d.pa||""}"></label><label>Ist-Ankunft<input class="ra" type="time" value="${d.ra||""}"></label><label>Plan-Abfahrt<input class="pd" type="time" value="${d.pd||""}"></label><label>Ist-Abfahrt<input class="rd" type="time" value="${d.rd||""}"></label><label class="full">Ausbildungsnotiz<textarea class="note" placeholder="z. B. Bremsung etwas spät, Signalansage selbstständig ...">${esc(d.note)}</textarea></label></div>`;$("stops").appendChild(el);renumber()}
