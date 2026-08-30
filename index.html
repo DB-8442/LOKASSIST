@@ -602,7 +602,7 @@ function removeVehicleRow(i){
 }
 function reverseVehicleRows(){
  const rows=collectVehicleRows();
- tfVehicles=rows.map(x=>({...x})).reverse();
+ tfVehicles=rows.map(x=>({...x})).reverse().map((x,i)=>({...x,position:String(i+1)}));
  if(!tfData?.savedId)localStorage.setItem(VEHICLE_KEY,JSON.stringify(tfVehicles));
  renderVehicles();
  $("vehicleStatus").textContent="✅ Zugverband wurde gewendet.";
