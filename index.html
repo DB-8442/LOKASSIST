@@ -211,6 +211,24 @@ async function getActiveTripsForDate(trips,date){
  return trips.filter(t=>activeIds.has(t.service_id));
 }
 
+function extractCategoryFromLine(value){
+ const raw=String(value||"").trim();
+ // Only established product prefixes followed by a line suffix are accepted.
+ // This deliberately does not inspect the train number or guess from free text.
+ const match=raw.match(/^(MEX|RE|RB|S|ICE|IC|EC|EN)\s*(\d+[A-Z-]*)$/i);
+ if(!match)return {category:"",line:raw};
+ const category=match[1].toUpperCase(),suffix=match[2].toUpperCase();
+ return {category,line:`${category} ${suffix}`};
+}
+function getTfClassification(ride){
+ const category=String(ride?.category||"").trim(),line=String(ride?.line||"").trim();
+ // Manually supplied values are authoritative. For automatic and legacy rides,
+ // derive a display value only; stored records are not changed by rendering.
+ if(ride?.source==="manual"||!line)return {category,line};
+ const inferred=extractCategoryFromLine(line);
+ return {category:category||inferred.category,line:inferred.line||line};
+}
+
 async function findTripsForNumber(train,date){
  const clean=String(train||"").trim();
  if(!clean)return [];
@@ -268,11 +286,12 @@ async function findTripsForNumber(train,date){
   const signature=[first,last,departure,arrival,trip.trip_headsign||"",route?.route_short_name||route?.route_long_name||""].join("|");
   if(seen.has(signature))continue;
   seen.add(signature);
-  // GTFS supplies route fields, but no reliable universal field for a rail
-  // category. Keep only values explicitly supplied by the source; never infer
-  // MEX/RE etc. from the train number or split a product designation.
-  const category=trip.zuggattung||trip.category||route?.zuggattung||route?.category||route?.route_category||"";
-  const line=trip.line||trip.line_name||route?.line||route?.route_short_name||route?.route_long_name||"";
+  // The public line/product label is API data. A known, unambiguous prefix in
+  // that label may be split off, but the train number is never consulted.
+  const rawLine=trip.line||trip.line_name||route?.line||route?.route_short_name||route?.route_long_name||"";
+  const inferred=extractCategoryFromLine(rawLine);
+  const category=trip.zuggattung||trip.category||route?.zuggattung||route?.category||route?.route_category||inferred.category;
+  const line=inferred.line||rawLine;
   candidates.push({trip_id:trip.trip_id,trip_headsign:trip.trip_headsign||"",route_name:route?.route_long_name||route?.route_short_name||"",agency_id:route?.agency_id||"",category,line,first,last,departure,arrival});
  }
  candidates.sort((a,b)=>(a.departure||"").localeCompare(b.departure||"")||(a.first||"").localeCompare(b.first||""));
@@ -697,7 +716,7 @@ function renderServiceHistory(){
  rides.forEach(ride=>{const key=ride.serviceId||"unassigned";if(!groups.has(key))groups.set(key,[]);groups.get(key).push(ride)});
  box.innerHTML=[...groups.values()].map(items=>{
   const first=items[0],title=first.serviceId?`${esc(first.serviceName||"Dienst ohne Bezeichnung")} · ${esc(first.serviceDate||first.date||"—")}`:"Ohne Dienstzuordnung";
-  const rows=items.map(x=>`<div class="metric"><span><b>${esc(x.train||"keine Zugnummer")}</b> · ${esc(x.category||"Zuggattung n. v.")}${x.line?` · ${esc(x.line)}`:""}<br><span class="muted">${esc(x.rideType||"Planmäßige Fahrt")} · ${esc(x.route||"ohne Laufweg")}</span></span><button class="secondary" onclick='loadTfRide(${JSON.stringify(x.id)})'>Öffnen</button></div>`).join("");
+  const rows=items.map(x=>{const c=getTfClassification(x);return `<div class="metric"><span><b>${esc(x.train||"keine Zugnummer")}</b> · ${esc(c.category||"Zuggattung n. v.")}${c.line?` · ${esc(c.line)}`:""}<br><span class="muted">${esc(x.rideType||"Planmäßige Fahrt")} · ${esc(x.route||"ohne Laufweg")}</span></span><button class="secondary" onclick='loadTfRide(${JSON.stringify(x.id)})'>Öffnen</button></div>`}).join("");
   return `<h3>${title}</h3>${rows}`;
  }).join("")||"<p class='muted'>Noch keine Tf-Fahrten gespeichert.</p>";
 }
@@ -709,34 +728,35 @@ function formatVehicles(vehicles,fallbackVehicle){
 function renderTfRecent(){
  const a=getTfRides();
  const box=$("tfRecent"); if(!box)return;
- box.innerHTML=a.slice(0,5).map(x=>`
+ box.innerHTML=a.slice(0,5).map(x=>{const c=getTfClassification(x);return `
  <div class="metric">
-  <span><b>${esc(x.date||"")}</b> · ${esc(x.train||"keine Zugnummer")} · ${esc(x.category||"Zuggattung n. v.")} ${x.line?`· ${esc(x.line)}`:""}<br>
+  <span><b>${esc(x.date||"")}</b> · ${esc(x.train||"keine Zugnummer")} · ${esc(c.category||"Zuggattung n. v.")} ${c.line?`· ${esc(c.line)}`:""}<br>
   <span class="muted">${esc(x.rideType||"Planmäßige Fahrt")} · ${esc(x.route||"ohne Laufweg")} · ${esc(formatVehicles(x.vehicles,x.vehicle))}${x.serviceId?` · Dienst ${esc(x.serviceName||x.serviceDate||x.date||"")}`:""}</span></span>
   <button class="secondary" onclick='loadTfRide(${JSON.stringify(x.id)})'>Öffnen</button>
- </div>`).join("") || "<p class='muted'>Noch keine eigenen Fahrten gespeichert.</p>";
+ </div>`}).join("") || "<p class='muted'>Noch keine eigenen Fahrten gespeichert.</p>";
 }
 function renderTfHistory(){
  const a=getTfRides(), box=$("tfHistoryList"); if(!box)return;
- box.innerHTML=a.map(x=>`
+ box.innerHTML=a.map(x=>{const c=getTfClassification(x);return `
  <div class="metric">
-  <span><b>${esc(x.date||"")}</b> · ${esc(x.train||"keine Zugnummer")} · ${esc(x.category||"Zuggattung n. v.")} ${x.line?`· ${esc(x.line)}`:""}<br>
+  <span><b>${esc(x.date||"")}</b> · ${esc(x.train||"keine Zugnummer")} · ${esc(c.category||"Zuggattung n. v.")} ${c.line?`· ${esc(c.line)}`:""}<br>
   <span class="muted">${esc(x.rideType||"Planmäßige Fahrt")} · ${esc(x.route||"ohne Laufweg")} · ${esc(formatVehicles(x.vehicles,x.vehicle))}${x.serviceId?` · Dienst ${esc(x.serviceName||x.serviceDate||x.date||"")}`:""}</span></span>
   <span class="actions">
    <button class="secondary" onclick='loadTfRide(${JSON.stringify(x.id)})'>Öffnen</button>
    <button class="danger" onclick='deleteTfRide(${JSON.stringify(x.id)})'>Löschen</button>
   </span>
- </div>`).join("") || "<p class='muted'>Noch keine eigenen Fahrten gespeichert.</p>";
+ </div>`}).join("") || "<p class='muted'>Noch keine eigenen Fahrten gespeichert.</p>";
 }
 function loadTfRide(id){
  const x=getTfRides().find(r=>r.id===id);if(!x)return;
+ const classification=getTfClassification(x);
  $("tfDate").value=x.date||today();$("tfTrain").value=x.train||"";$("tfVehicle").value=x.vehicle||"BR 8442";$("tfRoute").value=x.route||"";$("tfNotes").value=x.notes||"";
- $("tfCategory").value=x.category||"";$("tfLine").value=x.line||"";$("tfRideType").value=x.rideType||"Planmäßige Fahrt";
+ $("tfCategory").value=classification.category||"";$("tfLine").value=classification.line||"";$("tfRideType").value=x.rideType||"Planmäßige Fahrt";
  $("tfStart").value=x.plan?.first||"";$("tfDestination").value=x.plan?.last||"";$("tfIntermediateStops").value=(x.manualStops||x.plan?.stops?.slice(1,-1).map(s=>s.name)||[]).join("\n");$("tfManualReason").value=x.manualReason||"";
  tfVehicles=(Array.isArray(x.vehicles)?x.vehicles:getVehicles()).map(v=>({...v}));
- tfData={savedId:x.id,createdAt:x.createdAt||new Date().toISOString(),savedPlan:x.plan||null,vehicles:tfVehicles.map(v=>({...v})),source:x.source||"automatic",category:x.category||"",line:x.line||"",rideType:x.rideType||"Planmäßige Fahrt",manualReason:x.manualReason||"",manualStops:x.manualStops||[],serviceId:x.serviceId||null,serviceName:x.serviceName||"",serviceDate:x.serviceDate||x.date||null};
+ tfData={savedId:x.id,createdAt:x.createdAt||new Date().toISOString(),savedPlan:x.plan||null,vehicles:tfVehicles.map(v=>({...v})),source:x.source||"automatic",category:classification.category,line:classification.line,rideType:x.rideType||"Planmäßige Fahrt",manualReason:x.manualReason||"",manualStops:x.manualStops||[],serviceId:x.serviceId||null,serviceName:x.serviceName||"",serviceDate:x.serviceDate||x.date||null};
  $("tfManualOffer").style.display="none";$("tfManualFields").style.display=(x.source==="manual")?"block":"none";
- renderVehicles();renderSavedTfPlan(x.plan);setTfEditMode(false);$("tfStatus").innerHTML=x.source==="manual"?"<span class='source-badge manual'>Manueller Zuglauf</span> 📋 Gespeicherte Fahrt geladen.":"<span class='source-badge'>Automatischer Zuglauf</span> 📋 Gespeicherte Fahrt geladen.";show("tf");
+ renderVehicles();renderSavedTfPlan(x.plan);setTfEditMode(false);$("tfStatus").innerHTML=x.source==="manual"?"<span class='source-badge manual'>Manueller Zuglauf</span> 📋 Gespeicherte Fahrt geladen.":`<span class='source-badge'>Automatischer Zuglauf</span> 📋 Gespeicherte Fahrt geladen.${classification.category?` · ${esc(classification.category)}`:""}${classification.line?` · ${esc(classification.line)}`:""}`;show("tf");
 }
 function deleteTfRide(id){
  if(!confirm("Diese eigene Fahrt wirklich löschen?"))return;
