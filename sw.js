@@ -1,6 +1,6 @@
-const VERSION="1.1.0";
+const VERSION="1.2.0";
 const CACHE_NAME=`lokassistent-${VERSION}`;
-const ASSETS=["./","./index.html","./manifest.webmanifest","./sw.js","./lokassistent-logo.png","./apple-touch-icon-180.png","./lokassistent-icon-512.png"];
+const ASSETS=["./","./index.html","./storage.js","./manifest.webmanifest","./sw.js","./lokassistent-logo.png","./apple-touch-icon-180.png","./lokassistent-icon-512.png"];
 self.addEventListener("install",e=>{self.skipWaiting();e.waitUntil(caches.open(CACHE_NAME).then(c=>c.addAll(ASSETS)))});
 self.addEventListener("activate",e=>e.waitUntil((async()=>{const keys=await caches.keys();await Promise.all(keys.filter(k=>k.startsWith("lokassistent-")&&k!==CACHE_NAME).map(k=>caches.delete(k)));await self.clients.claim()})()));
 self.addEventListener("fetch",e=>{
