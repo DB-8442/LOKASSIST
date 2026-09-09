@@ -1,6 +1,6 @@
 const assert=require('node:assert/strict');
 const test=require('node:test');
-const {KEYS,JOURNAL_KEY,createStore,validateBackup,parseBackup,rideServiceFields}=require('../storage.js');
+const {APP_VERSION,KEYS,JOURNAL_KEY,TIMETABLE_DIAGNOSTICS_KEY,TIMETABLE_DIAGNOSTICS_LIMIT,createStore,validateBackup,parseBackup,rideServiceFields}=require('../storage.js');
 const clone=value=>JSON.parse(JSON.stringify(value));
 const at='2026-09-07T10:00:00.000Z';
 function service(overrides={}){return {id:'service-1',name:'Frühdienst',serviceDate:'2026-09-07',startTime:'06:00',endDate:'2026-09-07',endTime:'10:00',status:'closed',createdAt:at,updatedAt:at,...overrides}}
@@ -16,7 +16,7 @@ test('full export includes every business key, saved plan and hidden training da
  const {b,storage,store}=seeded();
  for(const key of ['appPin','tfTripSel:2026-09-07:123','tripSel:2026-09-07:123','irrelevant'])storage.setItem(key,'secret');
  const result=store.exportBackup();
- assert.equal(result.formatVersion,1);assert.equal(result.appVersion,'1.2.0');assert.ok(Date.parse(result.exportedAt));
+ assert.equal(result.formatVersion,1);assert.equal(result.appVersion,APP_VERSION);assert.ok(Date.parse(result.exportedAt));
  assert.deepEqual(result.data,b.data);assert.equal(JSON.stringify(result).includes('secret'),false);assert.equal(JSON.stringify(result).includes('appPin'),false);
  assert.deepEqual(validateBackup(result).data,b.data);
 });
@@ -24,6 +24,18 @@ test('valid restore replaces all business data, preserves PIN and cached selecti
  const storage=memory({appPin:'1234','tfTripSel:old':'selection',tfRides:'[]',lokassistentProfile:'{"name":"old"}'}),store=createStore(storage),b=backup();
  let confirmed=0;assert.equal(store.restore(JSON.stringify(b),parsed=>{confirmed++;assert.equal(parsed.kind,'full');return true}),'full');
  assert.equal(confirmed,1);assert.deepEqual(store.snapshot(),b.data);assert.equal(storage.getItem('appPin'),'1234');assert.equal(storage.getItem('tfTripSel:old'),'selection');assert.equal(storage.getItem(JOURNAL_KEY),null);
+});
+test('timetable failures are recorded locally with a strict technical field allowlist and excluded from backup',()=>{
+ const storage=memory(),store=createStore(storage);const entry=store.recordTimetableDiagnostic({timestamp:at,endpoint:'trips',train:'22792',date:'2026-09-09',errorClass:'http',status:503,attempts:4,online:true,durationMs:1700,userName:'Marco',profile:{email:'private@example.org'},serviceName:'Dienst',vehicle:'8442'});
+ assert.deepEqual(Object.keys(entry),['timestamp','endpoint','train','date','errorClass','status','attempts','online','durationMs']);
+ assert.equal(entry.status,503);assert.equal(store.getTimetableDiagnostics().length,1);
+ const raw=storage.getItem(TIMETABLE_DIAGNOSTICS_KEY);for(const forbidden of ['Marco','private@example.org','Dienst','vehicle','profile','userName'])assert.doesNotMatch(raw,new RegExp(forbidden));
+ assert.equal(JSON.stringify(store.exportBackup()).includes(TIMETABLE_DIAGNOSTICS_KEY),false);assert.equal(JSON.stringify(store.exportBackup()).includes('22792'),false);
+});
+test('timetable diagnostics use a bounded ring buffer',()=>{
+ const storage=memory(),store=createStore(storage);
+ for(let i=0;i<TIMETABLE_DIAGNOSTICS_LIMIT+7;i++)store.recordTimetableDiagnostic({timestamp:new Date(Date.parse(at)+i*1000).toISOString(),endpoint:'trips',train:String(22000+i),date:'2026-09-09',errorClass:'network',attempts:4,online:false,durationMs:i});
+ const rows=store.getTimetableDiagnostics();assert.equal(rows.length,TIMETABLE_DIAGNOSTICS_LIMIT);assert.equal(rows[0].train,String(22007));assert.equal(rows.at(-1).train,String(22000+TIMETABLE_DIAGNOSTICS_LIMIT+6));
 });
 test('cancelled restore does not write or replace any data',()=>{
  const {storage,store}=seeded(),before=new Map(storage.values);assert.equal(store.restore(JSON.stringify(backup()),()=>false),false);assert.deepEqual(storage.values,before);assert.deepEqual(storage.writes,[]);

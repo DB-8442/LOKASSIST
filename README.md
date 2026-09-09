@@ -1,6 +1,6 @@
 # LOKASSIST
 
-Version **1.2.0** – vollständige lokale Backups und dauerhaftes Dienstarchiv.
+Version **1.2.1** – robuster Fahrplandaten-Abruf, vollständige lokale Backups und dauerhaftes Dienstarchiv.
 
 ## Backup und Wiederherstellung
 
@@ -125,5 +125,5 @@ Manueller Mobil-/PWA-Test auf einer Testinstallation:
 4. Nach erfolgreichem Import Profil, Fahrzeuge und Verlauf vergleichen. Eine
    ungültige Datei muss abgelehnt werden. Die PIN bleibt bestehen.
 5. Einmal online öffnen, danach offline neu laden: `storage.js` gehört zum
-   Service-Worker-Cache `lokassistent-1.2.0`. Ein Cachewechsel löscht ausschließlich
+   Service-Worker-Cache `lokassistent-1.2.1`. Ein Cachewechsel löscht ausschließlich
    frühere App-Caches, keine localStorage-Daten.

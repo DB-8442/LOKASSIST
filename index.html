@@ -33,13 +33,13 @@ nav{position:fixed;bottom:0;left:0;right:0;background:#fff;border-top:1px solid 
 </head>
 <body>
 <div class="app">
-<header><div class="brand"><img src="lokassistent-logo.png" alt="LOKASSIST Logo"><div><h1>LOKASSIST</h1><div class="sub">Dein digitaler Fahrbegleiter · 1.2.0 · Backup & Dienstarchiv</div></div></div></header>
+<header><div class="brand"><img src="lokassistent-logo.png" alt="LOKASSIST Logo"><div><h1>LOKASSIST</h1><div class="sub">Dein digitaler Fahrbegleiter · 1.2.1 · Backup & Dienstarchiv</div></div></div></header>
 
 <main>
 <section id="home" class="screen active">
 <div class="card hero"><img src="lokassistent-logo.png" alt=""><div><h2>Willkommen bei LOKASSIST</h2><p>Sicher. Pünktlich. Entspannt.</p></div></div>
 <div class="card" id="homeServiceCard"><h2>🗓️ Aktueller Dienst</h2><div id="serviceHomeStatus" class="muted">Kein Dienst aktiv.</div><div class="grid" style="margin-top:10px"><label>Dienst-/Schichtbezeichnung<input id="serviceName" placeholder="z. B. T15071 oder SDL"></label><label>Dienstbeginn Datum<input id="serviceDate" type="date"></label><label>Beginn<input id="serviceStart" type="time"></label></div><div class="actions"><button id="serviceStartBtn" class="primary" onclick="startService()">▶️ Dienst starten</button><button id="serviceFinishBtn" class="secondary" onclick="finishService()" style="display:none">😎 Feierabend</button></div><p class="muted">Ein Dienst kann über Mitternacht laufen. Neue Tf-Fahrten werden dem aktiven Dienst zugeordnet. Gespeicherte Fahrten behalten ihren Dienst.</p></div>
-<div class="section-title"><h2>Schnellzugriff</h2><span class="badge">1.2.0 · Backup & Dienstarchiv</span></div>
+<div class="section-title"><h2>Schnellzugriff</h2><span class="badge">1.2.1 · Backup & Dienstarchiv</span></div>
 <div class="tile-grid">
 <button class="tile accent" onclick="newTfRide()"><span class="icon">🚆</span><span><strong>Meine Fahrt</strong><br><small>Zuglauf, Fahrplan & persönliche Notizen</small></span></button>
 <button class="tile accent training-area" onclick="newRide()"><span class="icon">👨‍🏫</span><span><strong>Ausbilder</strong><br><small>Ausbildungsfahrt & Protokoll</small></span></button>
@@ -158,7 +158,7 @@ nav{position:fixed;bottom:0;left:0;right:0;background:#fff;border-top:1px solid 
 <nav><button onclick="show('home')">🏠<br>Start</button><button onclick="newTfRide()">🚆<br>Meine Fahrt</button><button class="training-area" onclick="newRide()">👨‍🏫<br>Ausbilder</button><button onclick="show('history');renderHistory()">📋<br>Verlauf</button><button onclick="show('settings')">⚙️<br>Mehr</button></nav>
 </div>
 
-<script src="storage.js"></script>
+<script src="storage.js?v=1.2.1"></script>
 <script>
 if(!requirePin()){
  document.body.innerHTML='<div style="padding:30px;font-family:sans-serif"><h2>🔒 LOKASSIST gesperrt</h2><p>Bitte Seite neu laden und die richtige PIN eingeben.</p></div>';
@@ -189,30 +189,48 @@ let stops=[...document.querySelectorAll(".stop")].map(x=>({name:x.querySelector(
 return {id:current?.id||crypto.randomUUID(),date:$("date").value,trainee:$("trainee").value,train:$("train").value,vehicle:$("vehicle").value,level:$("level").value,route:$("route").value,general:$("general").value,skills,stops};
 }
 
-async function apiGet(path){
- const u="https://api.mobidata-bw.de/gtfs/"+path;
- const r=await fetch(u,{headers:{"Accept":"application/json"}});
- if(!r.ok)throw new Error("HTTP "+r.status);
- return await r.json();
+const TIMETABLE_API_BASE="https://api.mobidata-bw.de/gtfs/";
+const TIMETABLE_REQUEST_TIMEOUT_MS=10000;
+const TIMETABLE_MAX_ATTEMPTS=4;
+const TIMETABLE_BACKOFF_MS=500;
+class TimetableApiError extends Error{
+ constructor(kind,message,details={}){super(message,{cause:details.cause});this.name="TimetableApiError";this.kind=kind;Object.assign(this,details)}
 }
-async function apiGetRetry(path, tries=4){
- let last;
- for(let i=1;i<=tries;i++){
+function timetableEndpoint(path){return String(path||"").split("?")[0].split("/").filter(Boolean).at(-1)||"unknown"}
+function retryableTimetableError(error){return error.kind==="network"||error.kind==="timeout"||(error.kind==="http"&&(error.status===408||error.status===429||error.status>=500&&error.status<=599))}
+function recordTimetableFailure(error,context={}){
+ dataStore.recordTimetableDiagnostic({timestamp:new Date().toISOString(),endpoint:error.endpoint||"unknown",train:String(context.train||""),date:String(context.date||""),errorClass:error.kind||"unknown",status:error.status??null,attempts:error.attempts||1,online:navigator.onLine!==false,durationMs:error.durationMs??null});
+}
+async function apiGetRetry(path,tries=TIMETABLE_MAX_ATTEMPTS,context={}){
+ const endpoint=timetableEndpoint(path),started=Date.now();let last;
+ for(let attempt=1;attempt<=tries;attempt++){
+  const controller=new AbortController();
+  const timeout=setTimeout(()=>controller.abort(),TIMETABLE_REQUEST_TIMEOUT_MS);
   try{
-   const r=await fetch("https://api.mobidata-bw.de/gtfs/"+path,{headers:{"Accept":"application/json"}});
-   if(!r.ok)throw new Error("HTTP "+r.status);
-   return await r.json();
-  }catch(e){last=e;if(i<tries)await new Promise(r=>setTimeout(r,500*i));}
+   const response=await fetch(TIMETABLE_API_BASE+path,{headers:{"Accept":"application/json"},signal:controller.signal,cache:"no-store"});
+   if(!response.ok)throw new TimetableApiError("http","Fahrplan-API antwortete mit einem HTTP-Fehler.",{status:response.status,endpoint});
+   let data;
+   try{data=await response.json()}catch(cause){throw new TimetableApiError("json_parse","Fahrplan-API lieferte kein gültiges JSON.",{endpoint,cause})}
+   if(!Array.isArray(data))throw new TimetableApiError("invalid_structure","Fahrplan-API lieferte eine unerwartete Datenstruktur.",{endpoint});
+   return data;
+  }catch(cause){
+   if(cause instanceof TimetableApiError)last=cause;
+   else if(cause?.name==="AbortError")last=new TimetableApiError("timeout","Zeitüberschreitung beim Laden der Fahrplandaten.",{endpoint,cause});
+   else last=new TimetableApiError("network","Netzwerkfehler beim Laden der Fahrplandaten.",{endpoint,cause});
+   last.attempts=attempt;last.durationMs=Date.now()-started;
+   if(!retryableTimetableError(last)||attempt===tries){recordTimetableFailure(last,context);throw last}
+   await new Promise(resolve=>setTimeout(resolve,TIMETABLE_BACKOFF_MS*attempt));
+  }finally{clearTimeout(timeout)}
  }
  throw last;
 }
-async function getActiveTripsForDate(trips,date){
+async function getActiveTripsForDate(trips,date,context={}){
  const serviceIds=[...new Set(trips.map(t=>t.service_id).filter(Boolean))];
  const activeIds=new Set();
 
  for(let i=0;i<serviceIds.length;i+=60){
   const q=serviceIds.slice(i,i+60).map(x=>encodeURIComponent(x)).join(",");
-  const rows=await apiGetRetry("service_days?date=eq."+encodeURIComponent(date)+"&service_id=in.("+q+")&limit=1000");
+  const rows=await apiGetRetry("service_days?date=eq."+encodeURIComponent(date)+"&service_id=in.("+q+")&limit=1000",TIMETABLE_MAX_ATTEMPTS,context);
   if(!Array.isArray(rows))continue;
   for(const row of rows){
    if(row.service_id)activeIds.add(row.service_id);
@@ -247,10 +265,11 @@ async function findTripsForNumber(train,date){
  // Only the public train number is used for discovery. The service_id from
  // each trip is then evaluated against GTFS calendar/calendar_dates for the
  // selected date.
- const trips=await apiGetRetry("trips?trip_short_name=eq."+encodeURIComponent(clean)+"&limit=200");
+ const context={train:clean,date};
+ const trips=await apiGetRetry("trips?trip_short_name=eq."+encodeURIComponent(clean)+"&limit=200",TIMETABLE_MAX_ATTEMPTS,context);
  if(!Array.isArray(trips)||!trips.length)return [];
 
- const active=await getActiveTripsForDate(trips,date);
+ const active=await getActiveTripsForDate(trips,date,context);
  if(!active.length)return [];
 
  const timesByTrip=new Map();
@@ -258,7 +277,7 @@ async function findTripsForNumber(train,date){
   const batch=active.slice(i,i+8);
   const results=await Promise.all(batch.map(async trip=>{
    try{
-    return [trip.trip_id,await apiGetRetry("stop_times?trip_id=eq."+encodeURIComponent(trip.trip_id)+"&order=stop_sequence.asc")];
+    return [trip.trip_id,await apiGetRetry("stop_times?trip_id=eq."+encodeURIComponent(trip.trip_id)+"&order=stop_sequence.asc",TIMETABLE_MAX_ATTEMPTS,context)];
    }catch(_){return [trip.trip_id,[]]}
   }));
   for(const [id,times] of results)if(Array.isArray(times)&&times.length)timesByTrip.set(id,times);
@@ -269,7 +288,7 @@ async function findTripsForNumber(train,date){
  for(let i=0;i<stopIds.length;i+=80){
   const q=stopIds.slice(i,i+80).map(x=>encodeURIComponent(x)).join(",");
   try{
-   const ss=await apiGetRetry("stops?stop_id=in.("+q+")&limit=500");
+   const ss=await apiGetRetry("stops?stop_id=in.("+q+")&limit=500",TIMETABLE_MAX_ATTEMPTS,context);
    for(const s of (Array.isArray(ss)?ss:[]))stopsById[s.stop_id]=s;
   }catch(_){}
  }
@@ -279,7 +298,7 @@ async function findTripsForNumber(train,date){
  for(let i=0;i<routeIds.length;i+=80){
   const q=routeIds.slice(i,i+80).map(x=>encodeURIComponent(x)).join(",");
   try{
-   const rs=await apiGetRetry("routes?route_id=in.("+q+")&limit=500");
+   const rs=await apiGetRetry("routes?route_id=in.("+q+")&limit=500",TIMETABLE_MAX_ATTEMPTS,context);
    for(const r of (Array.isArray(rs)?rs:[]))routesById[r.route_id]=r;
   }catch(_){}
  }
@@ -349,12 +368,13 @@ async function useSelectedTrip(c){
  const request=++trainingRequestGeneration;
  $("trainStatus").textContent="⏳ Lade ausgewählten Zuglauf …";
  try{
-  const times=await apiGetRetry("stop_times?trip_id=eq."+encodeURIComponent(c.trip_id)+"&order=stop_sequence.asc");
+  const context={train:$("train").value.trim(),date:$("date").value||today()};
+  const times=await apiGetRetry("stop_times?trip_id=eq."+encodeURIComponent(c.trip_id)+"&order=stop_sequence.asc",TIMETABLE_MAX_ATTEMPTS,context);
   if(!times?.length)throw new Error("Keine Halte gefunden");
   const ids=[...new Set(times.map(x=>x.stop_id).filter(Boolean))];let stops=[];
   for(let i=0;i<ids.length;i+=40){
    const q=ids.slice(i,i+40).map(x=>encodeURIComponent(x)).join(",");
-   stops=stops.concat(await apiGetRetry("stops?stop_id=in.("+q+")&limit=100"));
+   stops=stops.concat(await apiGetRetry("stops?stop_id=in.("+q+")&limit=100",TIMETABLE_MAX_ATTEMPTS,context));
   }
   if(request!==trainingRequestGeneration)return;
   const byId=Object.fromEntries(stops.map(s=>[s.stop_id,s]));
@@ -521,12 +541,13 @@ async function useSelectedTfTrip(c){
  const request=++tfRequestGeneration;
  $("tfStatus").textContent="⏳ Lade ausgewählten Zuglauf …";
  try{
-  const times=await apiGetRetry("stop_times?trip_id=eq."+encodeURIComponent(c.trip_id)+"&order=stop_sequence.asc");
+  const context={train:$("tfTrain").value.trim(),date:$("tfDate").value||today()};
+  const times=await apiGetRetry("stop_times?trip_id=eq."+encodeURIComponent(c.trip_id)+"&order=stop_sequence.asc",TIMETABLE_MAX_ATTEMPTS,context);
   if(!times?.length)throw new Error("Keine Halte gefunden");
   const ids=[...new Set(times.map(x=>x.stop_id).filter(Boolean))];let stops=[];
   for(let i=0;i<ids.length;i+=40){
    const q=ids.slice(i,i+40).map(x=>encodeURIComponent(x)).join(",");
-   stops=stops.concat(await apiGetRetry("stops?stop_id=in.("+q+")&limit=100"));
+   stops=stops.concat(await apiGetRetry("stops?stop_id=in.("+q+")&limit=100",TIMETABLE_MAX_ATTEMPTS,context));
   }
   if(request!==tfRequestGeneration)return;
   const byId=Object.fromEntries(stops.map(s=>[s.stop_id,s]));

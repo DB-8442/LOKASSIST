@@ -11,7 +11,7 @@ const plain=value=>JSON.parse(JSON.stringify(value));
 
 // Minimal DOM adapter: the real inline script, event handlers and storage
 // module run unchanged. This does not simulate browser layout or rendering.
-function app(seed={}){
+function app(seed={},runtime={}){
  const elements=new Map(),values=new Map(Object.entries(seed)),alerts=[],confirms=[],created=[];
  let approve=true,download=null;
  const decode=s=>s.replaceAll('&quot;','"').replaceAll('&#39;',"'").replaceAll('&lt;','<').replaceAll('&gt;','>').replaceAll('&amp;','&');
@@ -42,7 +42,7 @@ function app(seed={}){
   querySelector:selector=>selector==='#vehicleList'?elements.get('vehicleList'):null,
   querySelectorAll:selector=>selector==='[id^="vbr"]'?[...elements].filter(([id])=>/^vbr\d+$/.test(id)).map(([,node])=>node):[]};
  const localStorage={getItem:key=>values.get(key)??null,setItem:(key,value)=>values.set(key,String(value)),removeItem:key=>values.delete(key)};
- const context=vm.createContext({document,localStorage,LokassistStorage:storageApi,crypto,Date,Blob,URL:{createObjectURL:()=> 'blob:test',revokeObjectURL(){}},setTimeout(){},navigator:{},window:{scrollTo(){}},alert:message=>alerts.push(message),confirm:message=>{confirms.push(message);return approve},prompt:()=>seed.appPin,console});
+ const context=vm.createContext({document,localStorage,LokassistStorage:storageApi,crypto,Date,Blob,URL:{createObjectURL:()=> 'blob:test',revokeObjectURL(){}},fetch:runtime.fetch,AbortController:runtime.AbortController||AbortController,setTimeout:runtime.setTimeout||(()=>0),clearTimeout:runtime.clearTimeout||(()=>{}),navigator:runtime.navigator||{onLine:true},window:{scrollTo(){}},alert:message=>alerts.push(message),confirm:message=>{confirms.push(message);return approve},prompt:()=>seed.appPin,console});
  vm.runInContext(script,context);
  const run=source=>vm.runInContext(source,context);
  const field=(id,value)=>{assert.ok(elements.has(id),'missing DOM field '+id);elements.get(id).value=value};
@@ -119,7 +119,52 @@ test('imported IDs and training skill labels cannot inject markup into history o
  a.run('buildSkills({PZB:{level:"<img src=x onerror=alert(1)>",note:""}})');
  assert.ok(a.created.some(node=>node.innerHTML.includes('id="sv11">&lt;img src=x onerror=alert(1)&gt;</span>')));
 });
+function apiApp(fetch){return app({}, {fetch,setTimeout(fn){fn();return 1},clearTimeout(){},navigator:{onLine:true}})}
+function response(status,data=[]){return {ok:status>=200&&status<300,status,json:async()=>data}}
+test('timetable API accepts a successful array response without retry',async()=>{
+ let calls=0;const a=apiApp(async()=>{calls++;return response(200,[{trip_id:'ok'}])});
+ assert.deepEqual(plain(await a.context.apiGetRetry('trips?limit=1')),[{trip_id:'ok'}]);assert.equal(calls,1);
+});
+for(const status of [400,404])test(`timetable API does not retry permanent HTTP ${status}`,async()=>{
+ let calls=0;const a=apiApp(async()=>{calls++;return response(status)});
+ await assert.rejects(a.context.apiGetRetry('trips?limit=1'),e=>e.kind==='http'&&e.status===status&&e.attempts===1);assert.equal(calls,1);
+});
+for(const status of [408,429,500,502,503,504])test(`timetable API retries HTTP ${status} up to the maximum`,async()=>{
+ let calls=0;const a=apiApp(async()=>{calls++;return response(status)});
+ await assert.rejects(a.context.apiGetRetry('trips?limit=1'),e=>e.kind==='http'&&e.status===status&&e.attempts===4);assert.equal(calls,4);
+});
+test('timetable API retries network failures and respects the maximum attempts',async()=>{
+ let calls=0;const a=apiApp(async()=>{calls++;throw new TypeError('Failed to fetch')});
+ await assert.rejects(a.context.apiGetRetry('service_days?limit=1'),e=>e.kind==='network'&&e.attempts===4);assert.equal(calls,4);
+});
+test('final timetable API failure writes one classified local diagnostic',async()=>{
+ const a=apiApp(async()=>response(503));
+ await assert.rejects(a.context.apiGetRetry('trips?limit=1',4,{train:'22792',date:'2026-09-09'}));
+ const rows=plain(a.run('dataStore.getTimetableDiagnostics()'));assert.equal(rows.length,1);assert.ok(Date.parse(rows[0].timestamp));assert.deepEqual({...rows[0],timestamp:'checked',durationMs:0},{timestamp:'checked',endpoint:'trips',train:'22792',date:'2026-09-09',errorClass:'http',status:503,attempts:4,online:true,durationMs:0});
+});
+test('timetable API classifies timeouts and retries them',async()=>{
+ let calls=0;const a=apiApp(async(_url,{signal})=>{calls++;if(signal.aborted){const error=new Error('aborted');error.name='AbortError';throw error}});
+ await assert.rejects(a.context.apiGetRetry('stop_times?limit=1'),e=>e.kind==='timeout'&&e.attempts===4);assert.equal(calls,4);
+});
+test('timetable API classifies invalid JSON without retry',async()=>{
+ let calls=0;const a=apiApp(async()=>{calls++;return {ok:true,status:200,json:async()=>{throw new SyntaxError('bad json')}}});
+ await assert.rejects(a.context.apiGetRetry('stops?limit=1'),e=>e.kind==='json_parse'&&e.attempts===1);assert.equal(calls,1);
+});
+test('timetable API rejects an invalid response structure without retry',async()=>{
+ let calls=0;const a=apiApp(async()=>{calls++;return response(200,{unexpected:true})});
+ await assert.rejects(a.context.apiGetRetry('routes?limit=1'),e=>e.kind==='invalid_structure'&&e.attempts===1);assert.equal(calls,1);
+});
+test('empty timetable result remains a distinct business result with manual fallback',async()=>{
+ const a=app();a.field('tfTrain','22792');a.field('tfDate','2026-09-09');a.context.findTripsForNumber=async()=>[];await a.context.loadTfPlan();
+ assert.match(a.elements.get('tfStatus').textContent,/keine passende Fahrt gefunden/);assert.equal(a.elements.get('tfManualOffer').style.display,'block');
+});
+test('technical timetable failure keeps the manual fallback and hides raw details',async()=>{
+ const a=app();a.field('tfTrain','22792');a.context.findTripsForNumber=async()=>{throw new Error('HTTP 503')};await a.context.loadTfPlan();
+ assert.equal(a.elements.get('tfStatus').textContent,'⚠️ Fahrplandaten konnten nicht geladen werden.');assert.doesNotMatch(a.elements.get('tfStatus').textContent,/503/);assert.equal(a.elements.get('tfManualOffer').style.display,'block');
+});
 test('inline script and service worker compile; versions and offline asset stay consistent',()=>{
  assert.doesNotThrow(()=>new vm.Script(script));const sw=fs.readFileSync(path.join(__dirname,'..','sw.js'),'utf8');assert.doesNotThrow(()=>new vm.Script(sw));
- assert.match(sw,/const VERSION="1\.2\.0"/);assert.match(sw,/"\.\/storage\.js"/);assert.match(html,/1\.2\.0/);assert.doesNotMatch(html,/1\.1\.0/);assert.match(html,/training-area\{display:none!important\}/);
+ assert.equal(sw.match(/const VERSION="([^"]+)"/)[1],storageApi.APP_VERSION);
+ assert.ok(html.includes('storage.js?v='+storageApi.APP_VERSION));assert.ok(sw.includes('"./storage.js?v='+storageApi.APP_VERSION+'"'));
+ assert.match(sw,/"\.\/storage\.js"/);assert.match(html,/1\.2\.1/);assert.doesNotMatch(html,/1\.3\.0/);assert.match(html,/training-area\{display:none!important\}/);
 });

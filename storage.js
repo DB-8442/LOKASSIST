@@ -6,9 +6,11 @@
  else root.LokassistStorage=api;
 })(typeof globalThis!=="undefined"?globalThis:this,function(){
  "use strict";
- const APP_VERSION="1.2.0";
+ const APP_VERSION="1.2.1";
  const KEYS={tfRides:"tfRides",rides:"rides",services:"lokassistentServices",currentService:"lokassistentCurrentService",vehicles:"lokassistentCurrentVehicles",profile:"lokassistentProfile"};
  const JOURNAL_KEY="lokassistentStorageTransaction";
+ const TIMETABLE_DIAGNOSTICS_KEY="lokassistentTimetableDiagnostics";
+ const TIMETABLE_DIAGNOSTICS_LIMIT=30;
  const MAX_FILE_BYTES=20*1024*1024;
  const fail=(path,message)=>{throw new Error(`${path}: ${message}`)};
  function object(value,path,allowed,required=allowed){
@@ -159,6 +161,32 @@
     throw new Error("Nicht gespeichert. Der vorherige Bestand wurde beibehalten. Bitte freien Gerätespeicher und Browserzugriff prüfen.",{cause:error});
    }
   }
+  function getTimetableDiagnostics(){
+   try{
+    const value=JSON.parse(storage.getItem(TIMETABLE_DIAGNOSTICS_KEY)||"[]");
+    return Array.isArray(value)?value.slice(-TIMETABLE_DIAGNOSTICS_LIMIT):[];
+   }catch(_){return []}
+  }
+  function recordTimetableDiagnostic(value){
+   try{
+    const endpoint=String(value?.endpoint||"unknown");
+    const errorClass=String(value?.errorClass||"unknown");
+    const entry={
+     timestamp:timestamp(value?.timestamp,"Diagnose.timestamp"),
+     endpoint:["trips","service_days","stop_times","stops","routes","unknown"].includes(endpoint)?endpoint:"unknown",
+     train:typeof value?.train==="string"&&/^\d{1,10}$/.test(value.train)?value.train:"",
+     date:typeof value?.date==="string"&&/^\d{4}-\d{2}-\d{2}$/.test(value.date)?value.date:"",
+     errorClass:["http","network","timeout","json_parse","invalid_structure","unknown"].includes(errorClass)?errorClass:"unknown",
+     status:Number.isInteger(value?.status)?value.status:null,
+     attempts:Number.isInteger(value?.attempts)&&value.attempts>0?value.attempts:1,
+     online:value?.online!==false,
+     durationMs:Number.isFinite(value?.durationMs)&&value.durationMs>=0?Math.round(value.durationMs):null
+    };
+    const rows=getTimetableDiagnostics();rows.push(entry);
+    storage.setItem(TIMETABLE_DIAGNOSTICS_KEY,JSON.stringify(rows.slice(-TIMETABLE_DIAGNOSTICS_LIMIT)));
+    return entry;
+   }catch(_){return null}
+  }
   function snapshot(){return validateData(Object.fromEntries(Object.entries(KEYS).map(([name,key])=>[name,read(key,name==="currentService"?null:name==="profile"?{}:[])])))}
   function initialize(){
    recover();
@@ -190,11 +218,11 @@
    const changes=parsed.kind==="training"?{[KEYS.rides]:parsed.rides}:Object.fromEntries(Object.entries(KEYS).map(([name,key])=>[key,parsed.data[name]]));
    write(changes);return parsed.kind;
   }
-  return {initialize,recover,snapshot,saveService,exportBackup,restore};
+  return {initialize,recover,snapshot,saveService,exportBackup,restore,getTimetableDiagnostics,recordTimetableDiagnostic};
  }
  function rideServiceFields(existing,currentService,rideDate){
   if(existing)return {serviceId:existing.serviceId??null,serviceName:existing.serviceName??"",serviceDate:existing.serviceDate??existing.date??rideDate};
   return currentService?.status==="active"?{serviceId:currentService.id,serviceName:currentService.name,serviceDate:currentService.serviceDate}:{serviceId:null,serviceName:"",serviceDate:rideDate};
  }
- return {APP_VERSION,KEYS,JOURNAL_KEY,MAX_FILE_BYTES,validateBackup,parseBackup,validateData,createStore,rideServiceFields};
+ return {APP_VERSION,KEYS,JOURNAL_KEY,TIMETABLE_DIAGNOSTICS_KEY,TIMETABLE_DIAGNOSTICS_LIMIT,MAX_FILE_BYTES,validateBackup,parseBackup,validateData,createStore,rideServiceFields};
 });
